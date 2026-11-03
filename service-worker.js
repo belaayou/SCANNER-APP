@@ -3,22 +3,29 @@
    Chemins 100 % relatifs : fonctionne dans /<depot>/ sur GitHub Pages.
    Pour publier une nouvelle version : changer VERSION ci-dessous.
    ===================================================================== */
-const VERSION = "v2.0.0";
+const VERSION = "v1.2.0";
 const CACHE_PREFIX = "scanner-app-";
 const CACHE_LOCAL = CACHE_PREFIX + "local-" + VERSION;
 const CACHE_CDN = CACHE_PREFIX + "cdn-" + VERSION;
 
 /* Ressources locales (relatives à l'emplacement de ce fichier) */
-const LOCAL_ASSETS = [
+/* Indispensables : si l'un manque, l'installation du SW échoue (visible dans la console) */
+const REQUIRED_ASSETS = [
   "./",
   "./index.html",
-  "./manifest.json",
+  "./manifest.json"
+];
+/* Facultatifs : mis en cache s'ils existent (copies locales des bibliothèques, icônes) */
+const OPTIONAL_ASSETS = [
+  "./libs/html5-qrcode.min.js",
+  "./libs/supabase.min.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/icon-maskable-192.png",
   "./icons/icon-maskable-512.png",
   "./icons/apple-touch-icon.png"
 ];
+const LOCAL_ASSETS = REQUIRED_ASSETS.concat(OPTIONAL_ASSETS);
 
 /* Dépendances externes réellement utilisées par index.html */
 const CDN_SCRIPTS = [
@@ -68,10 +75,30 @@ async function precacheCdn() {
   }));
 }
 
+async function precacheLocal(cache) {
+  await cache.addAll(REQUIRED_ASSETS.map((u) => new Request(u, { cache: "reload" })));
+  await Promise.all(OPTIONAL_ASSETS.map(async (u) => {
+    try {
+      const res = await fetch(new Request(u, { cache: "reload" }));
+      if (res.ok) await cache.put(u, res);
+    } catch (e) { /* absent ou hors ligne : ignoré */ }
+  }));
+}
+
+/* Le CDN n'est utile hors ligne que si aucune copie locale n'existe : on complète à la demande */
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "PRECACHE") {
+    event.waitUntil((async () => {
+      await precacheLocal(await caches.open(CACHE_LOCAL)).catch(() => {});
+      await precacheCdn();
+    })());
+  }
+});
+
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_LOCAL);
-    await cache.addAll(LOCAL_ASSETS.map((u) => new Request(u, { cache: "reload" })));
+    await precacheLocal(cache);
     await precacheCdn();
     await self.skipWaiting();
   })());
