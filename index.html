@@ -19,9 +19,100 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&amp;display=swap"
         rel="stylesheet" />
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <!-- Bibliothèques : copie locale (dossier libs/) en priorité, CDN en secours si le fichier local est absent -->
+    <script src="libs/html5-qrcode.min.js" type="text/javascript"
+        onerror="document.write('<script src=\'https://unpkg.com/html5-qrcode\'><\/script>')"></script>
     <!-- Client Supabase (remplace l'ancienne dépendance Google Apps Script) -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="libs/supabase.min.js"
+        onerror="document.write('<script src=\'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2\'><\/script>')"></script>
+
+    <!-- CAMÉRA / INSTALLATION : utilitaires (suivi des flux caméra, délais, bouton d'installation) -->
+    <script>
+        (function () {
+            /* Suivi de tous les flux caméra ouverts, pour pouvoir toujours les libérer */
+            var streams = new Set();
+            try {
+                var md = navigator.mediaDevices;
+                if (md && typeof md.getUserMedia === "function") {
+                    var orig = md.getUserMedia.bind(md);
+                    md.getUserMedia = function (c) {
+                        return orig(c).then(function (st) { streams.add(st); return st; });
+                    };
+                }
+            } catch (e) { }
+
+            window.releaseAllCameraStreams = function () {
+                streams.forEach(function (st) {
+                    try { st.getTracks().forEach(function (t) { try { t.stop(); } catch (e) { } }); } catch (e) { }
+                });
+                streams.clear();
+                try {
+                    document.querySelectorAll("#reader video").forEach(function (v) {
+                        try {
+                            var so = v.srcObject;
+                            if (so && so.getTracks) so.getTracks().forEach(function (t) { try { t.stop(); } catch (e) { } });
+                            v.pause();
+                            v.srcObject = null;
+                        } catch (e) { }
+                    });
+                } catch (e) { }
+            };
+
+            /* Empêche qu'une opération caméra bloquée ne paralyse la file start/stop */
+            window.withTimeout = function (promise, ms) {
+                return new Promise(function (resolve, reject) {
+                    var t = setTimeout(function () { reject(new Error("TIMEOUT")); }, ms);
+                    Promise.resolve(promise).then(
+                        function (v) { clearTimeout(t); resolve(v); },
+                        function (e) { clearTimeout(t); reject(e); }
+                    );
+                });
+            };
+
+            /* Bouton d'installation (beforeinstallprompt) */
+            var deferredPrompt = null;
+            function isStandalone() {
+                return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+                    window.navigator.standalone === true;
+            }
+            function isIOS() {
+                return /iphone|ipad|ipod/i.test(navigator.userAgent);
+            }
+            function syncInstallBtn() {
+                var btn = document.getElementById("installBtn");
+                if (!btn) return;
+                var show = !isStandalone() && (deferredPrompt || isIOS());
+                btn.style.display = show ? "flex" : "none";
+            }
+            window.addEventListener("beforeinstallprompt", function (e) {
+                e.preventDefault();
+                deferredPrompt = e;
+                syncInstallBtn();
+            });
+            window.addEventListener("appinstalled", function () {
+                deferredPrompt = null;
+                syncInstallBtn();
+            });
+            document.addEventListener("DOMContentLoaded", function () {
+                var btn = document.getElementById("installBtn");
+                if (btn) {
+                    btn.addEventListener("click", function () {
+                        if (deferredPrompt) {
+                            var dp = deferredPrompt;
+                            dp.prompt();
+                            dp.userChoice.then(function () {
+                                deferredPrompt = null;
+                                syncInstallBtn();
+                            }).catch(function () { deferredPrompt = null; syncInstallBtn(); });
+                        } else if (isIOS()) {
+                            alert("SAFARI : APPUYER SUR PARTAGER PUIS « SUR L'ÉCRAN D'ACCUEIL ».");
+                        }
+                    });
+                }
+                syncInstallBtn();
+            });
+        })();
+    </script>
 
     <style>
         :root {
@@ -992,6 +1083,10 @@
                 <span class="material-icons">flash_off</span>
             </button>
             <div class="top-right-actions">
+                <button class="icon-button" id="installBtn" style="display: none;" title="INSTALLER L'APPLICATION"
+                    aria-label="INSTALLER L'APPLICATION">
+                    <span class="material-icons">get_app</span>
+                </button>
                 <button class="icon-button" id="logoutBtn" style="display: none;">
                     <span class="material-icons">logout</span>
                 </button>
@@ -1903,11 +1998,26 @@
 
             if (!scanner) {
 
+                // Aucun scanner référencé (démarrage échoué, etc.) : on libère quand même la caméra
+                releaseAllCameraStreams();
+
+                const readerEmpty =
+                    document.getElementById(
+                        "reader"
+                    );
+
+                if (readerEmpty) {
+
+                    readerEmpty.innerHTML =
+                        "";
+
+                }
+
                 return;
 
             }
 
-            // TORCH OFF (avant l'arrêt de la caméra)
+            // TORCH OFF (avant l'arrêt de la caméra) - avec délai maximal
             try {
 
                 const track =
@@ -1918,32 +2028,41 @@
                     track.readyState === "live"
                 ) {
 
-                    await track.applyConstraints({
+                    await withTimeout(
+                        track.applyConstraints({
 
-                        advanced: [
+                            advanced: [
 
-                            {
-                                torch: false
-                            }
+                                {
+                                    torch: false
+                                }
 
-                        ]
+                            ]
 
-                    });
+                        }),
+                        1500
+                    );
 
                 }
 
             } catch (e) { }
 
-            // STOP CAMERA
+            // STOP CAMERA - avec délai maximal
             try {
 
-                await scanner.stop();
+                await withTimeout(
+                    scanner.stop(),
+                    4000
+                );
 
             } catch (e) {
 
-                // scanner déjà arrêté : aucune erreur bloquante
+                // scanner déjà arrêté ou bloqué : aucune erreur bloquante
 
             }
+
+            // Libération forcée : toutes les pistes du MediaStream + video.srcObject
+            releaseAllCameraStreams();
 
             const reader =
                 document.getElementById(
@@ -1977,6 +2096,20 @@
 
             }
 
+            // Bibliothèque de scan absente (CDN inaccessible et pas de copie locale)
+            if (typeof Html5Qrcode === "undefined") {
+
+                showCameraError("LIB_MISSING");
+
+                return;
+
+            }
+
+            // Une seule caméra ouverte à la fois : libère tout flux résiduel
+            releaseAllCameraStreams();
+            readerEl.innerHTML = "";
+            window.__lastScannerStart = Date.now();
+
             // NOM PRÉNOM : lecture QR CODE uniquement
             // VIS : configuration d'origine (inchangée)
             const scanner =
@@ -1997,7 +2130,7 @@
 
             try {
 
-                await scanner.start(
+                await withTimeout(scanner.start(
 
                     {
                         facingMode: "environment"
@@ -2040,7 +2173,7 @@
 
                     () => { }
 
-                );
+                ), 15000);
 
             } catch (error) {
 
@@ -2056,12 +2189,26 @@
 
                 }
 
+                // Libère la caméra même si le démarrage a échoué à moitié
+                try { scanner.stop().catch(() => { }); } catch (e) { }
+                releaseAllCameraStreams();
+
+                if (sessionId === scannerSessionId) {
+
+                    showCameraError(error);
+
+                }
+
                 return;
 
             }
 
             // CAMERA STREAM READY → torche automatique (sans bloquer le scan)
             if (sessionId === scannerSessionId) {
+
+                verifyCameraHealth(
+                    sessionId
+                );
 
                 enableTorchAutomatically(
                     sessionId
@@ -4902,11 +5049,130 @@
            FIN DU SCRIPT
         ===================================================================== */
     </script>
+    <!-- CAMÉRA : messages d'erreur, vérification vidéo, reprise après interruption -->
+    <script>
+        (function () {
+            var savedInstr = null;
+            var lastMsg = null;
+            var retries = 0;
+            var stoppedByPagehide = false;
+
+            function instrEl() { return document.getElementById("targetInstructions"); }
+
+            window.showCameraError = function (err) {
+                var txt = String((err && (err.name || err.message)) || err || "");
+                var full = txt + " " + String(err);
+                var msg;
+                if (full.indexOf("LIB_MISSING") >= 0) {
+                    msg = "BIBLIOTHÈQUE DE SCAN INDISPONIBLE : OUVRIR L'APPLICATION UNE FOIS EN LIGNE";
+                } else if (!window.isSecureContext) {
+                    msg = "CAMÉRA INDISPONIBLE : CONNEXION HTTPS REQUISE";
+                } else if (/NotAllowed|Permission|denied/i.test(full)) {
+                    msg = "ACCÈS CAMÉRA REFUSÉ : AUTORISER LA CAMÉRA DANS LES PARAMÈTRES DU NAVIGATEUR";
+                } else if (/NotFound|DevicesNotFound|no camera/i.test(full)) {
+                    msg = "AUCUNE CAMÉRA DÉTECTÉE";
+                } else if (/NotReadable|TrackStart|Could not start|in use/i.test(full)) {
+                    msg = "CAMÉRA OCCUPÉE PAR UNE AUTRE APPLICATION : LA FERMER PUIS RÉESSAYER";
+                } else if (/TIMEOUT/.test(full)) {
+                    msg = "LA CAMÉRA NE RÉPOND PAS : QUITTER PUIS ROUVRIR LE SCANNER";
+                } else if (/CAMERA_BLACK/.test(full)) {
+                    msg = "IMAGE CAMÉRA INDISPONIBLE : QUITTER PUIS ROUVRIR LE SCANNER";
+                } else {
+                    msg = "ERREUR CAMÉRA : QUITTER PUIS ROUVRIR LE SCANNER";
+                }
+                var el = instrEl();
+                if (el) {
+                    if (savedInstr === null || el.textContent !== lastMsg) savedInstr = el.textContent;
+                    lastMsg = msg;
+                    el.textContent = msg;
+                }
+            };
+
+            function clearCameraError() {
+                var el = instrEl();
+                if (el && savedInstr !== null && el.textContent === lastMsg) {
+                    el.textContent = savedInstr;
+                }
+                savedInstr = null;
+                lastMsg = null;
+            }
+
+            function scannerViewActive() {
+                var v = document.getElementById("scanner-view");
+                return !!(v && v.classList.contains("active"));
+            }
+
+            /* Après le démarrage : la vidéo doit réellement afficher des images, sinon on relance */
+            window.verifyCameraHealth = function (sessionId) {
+                setTimeout(function () {
+                    if (sessionId !== scannerSessionId) return;
+                    var v = document.querySelector("#reader video");
+                    var t = getActiveVideoTrack();
+                    if (v && v.paused) { try { v.play(); } catch (e) { } }
+                    var ok = v && v.videoWidth > 0 && t && t.readyState === "live";
+                    if (ok) {
+                        retries = 0;
+                        clearCameraError();
+                        return;
+                    }
+                    if (retries < 2 && scannerViewActive() && document.visibilityState === "visible") {
+                        retries++;
+                        startScanner();
+                    } else {
+                        retries = 0;
+                        showCameraError("CAMERA_BLACK");
+                    }
+                }, 2500);
+            };
+
+            /* Reprise si la caméra a été coupée par le système (ex. retour depuis une autre appli) */
+            function resumeIfNeeded() {
+                if (document.visibilityState !== "visible") return;
+                if (!scannerViewActive() || !html5QrcodeScanner) return;
+                if (Date.now() - (window.__lastScannerStart || 0) < 3000) return;
+                var v = document.querySelector("#reader video");
+                var t = getActiveVideoTrack();
+                if (v && t && t.readyState === "live") {
+                    if (v.paused) { try { v.play(); } catch (e) { } }
+                    return;
+                }
+                startScanner();
+            }
+
+            /* Pas d'arrêt de la caméra quand la page passe simplement en arrière-plan */
+            document.addEventListener("visibilitychange", function () {
+                if (document.visibilityState === "visible") {
+                    setTimeout(resumeIfNeeded, 400);
+                }
+            });
+
+            window.addEventListener("pagehide", function () {
+                stoppedByPagehide = scannerViewActive() && !!html5QrcodeScanner;
+                try { stopScanner(); } catch (e) { }
+                releaseAllCameraStreams();
+            });
+
+            window.addEventListener("pageshow", function (e) {
+                if (e.persisted && stoppedByPagehide && scannerViewActive()) {
+                    stoppedByPagehide = false;
+                    setTimeout(function () { startScanner(); }, 200);
+                }
+            });
+        })();
+    </script>
+
     <!-- PWA : enregistrement du Service Worker (chemin relatif, compatible GitHub Pages) -->
     <script>
         if ("serviceWorker" in navigator) {
             window.addEventListener("load", function () {
-                navigator.serviceWorker.register("./service-worker.js").catch(function (err) {
+                navigator.serviceWorker.register("./service-worker.js").then(function (reg) {
+                    try { reg.update(); } catch (e) { }
+                    return navigator.serviceWorker.ready;
+                }).then(function (reg) {
+                    if (navigator.onLine && reg && reg.active) {
+                        reg.active.postMessage({ type: "PRECACHE" });
+                    }
+                }).catch(function (err) {
                     console.warn("[PWA] Service Worker non enregistré :", err);
                 });
             });
