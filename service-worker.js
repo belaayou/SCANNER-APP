@@ -3,7 +3,7 @@
    Chemins 100 % relatifs : fonctionne dans /<depot>/ sur GitHub Pages.
    Pour publier une nouvelle version : changer VERSION ci-dessous.
    ===================================================================== */
-const VERSION = "v1.2.0";
+const VERSION = "v1.3.0";
 const CACHE_PREFIX = "scanner-app-";
 const CACHE_LOCAL = CACHE_PREFIX + "local-" + VERSION;
 const CACHE_CDN = CACHE_PREFIX + "cdn-" + VERSION;
