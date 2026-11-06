@@ -1069,6 +1069,33 @@
                 filter: drop-shadow(0 0 12px rgba(234, 234, 0, 0.8));
             }
         }
+
+        /* Bouton crayon (saisie manuelle NOM / PRÉNOM) - écran caméra NOM uniquement */
+        .nom-edit-btn {
+            position: absolute;
+            left: 50%;
+            bottom: 100px;
+            transform: translateX(-50%);
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            border: 2px solid var(--primary);
+            background: rgba(19, 19, 19, 0.75);
+            color: var(--primary);
+            font-size: 26px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 20;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .nom-edit-btn:active {
+            transform: translateX(-50%) scale(0.94);
+        }
     </style>
 </head>
 
@@ -1199,6 +1226,8 @@
                         <div class="corner bl"></div>
                         <div class="corner br"></div>
                         <div id="reader"></div>
+                        <button type="button" class="nom-edit-btn" id="editNomBtn" style="display: none;"
+                            title="SAISIE MANUELLE NOM / PRÉNOM" aria-label="SAISIE MANUELLE NOM / PRÉNOM">✏️</button>
                     </div>
                 </div>
             </section>
@@ -1756,6 +1785,8 @@
             currentScanTargetMode =
                 "VIS";
 
+            setNomEditButtonVisible(false);
+
             if (scanStepIndicator) {
 
                 scanStepIndicator.textContent =
@@ -1779,6 +1810,8 @@
 
             currentScanTargetMode =
                 "NOM";
+
+            setNomEditButtonVisible(true);
 
             if (scanStepIndicator) {
 
@@ -5157,6 +5190,28 @@
                     stoppedByPagehide = false;
                     setTimeout(function () { startScanner(); }, 200);
                 }
+            });
+        })();
+    </script>
+
+    <!-- BOUTON CRAYON : ouvre la modal existante « SAISIE MANUELLE : NOM / PRÉNOM » -->
+    <script>
+        function setNomEditButtonVisible(visible) {
+            var b = document.getElementById("editNomBtn");
+            if (b) b.style.display = visible ? "flex" : "none";
+        }
+
+        (function () {
+            var b = document.getElementById("editNomBtn");
+            if (!b) return;
+            b.addEventListener("click", function () {
+                // Le code VIS de l'étape 1 doit exister (sinon rien n'est ouvert)
+                if (!REGEX_VIS.test(tempTargetVis)) return;
+                // Libère la caméra pendant la saisie (évite 2 flux et l'écran noir au retour)
+                try { stopScanner(); } catch (e) { }
+                inputNomPrenom.value = "";
+                modalSaisieNom.classList.add("active");
+                setTimeout(function () { inputNomPrenom.focus(); }, 100);
             });
         })();
     </script>
